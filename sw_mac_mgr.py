@@ -1,4 +1,4 @@
-import paramiko,time,os,re,sqlite3,threading
+import paramiko,time,os,re,sqlite3,threading,telnetlib
 # maclist(id integer primary key autoincrement,mac string,sw_id integer,vlan integer,port string,bind boolean,lastfind string,info string)
 # swlist(id integer primary key autoincrement,ip string,username string,password string,sw_type string,location string)
 db_path=r'e:\python\macdb.db'
@@ -33,6 +33,68 @@ print('Get mac-address OK['+str(sw_id)+']\n')
 """
 conn=sqlite3.connect(db_path)
 
+def ssh_cisco(sw_id):
+    conn=sqlite3.connect(db_path)
+    sql='select * from swlist where id='+str(sw_id)+';'
+    res=conn.execute(sql).fetchall()
+    swid=res[0][0]
+    ip=res[0][1]
+    username=res[0][2]
+    password=res[0][3]
+    sw_type=res[0][4]
+    location=res[0][5]
+    client=paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(ip,22,username,password)
+    chan=client.invoke_shell()
+    chan.send('en\r\n'+password+'\r\n')
+    mac_add=''
+    chan.send('show mac-add\n')
+    time.sleep(0.2)
+    res=chan.recv(2000)
+    mac_add+=res
+    print('Getting mac-address...['+str(sw_id)+']\n')
+    for i in range(15):
+        chan.send(' ')
+        time.sleep(0.5)
+        res=chan.recv(10000)
+        mac_add+=res
+    print('Get mac-address OK['+str(sw_id)+']\n')
+    user_bind=''
+    chan.send('show run \n')
+    time.sleep(0.2)
+    res=chan.recv(10000)
+    user_bind+=res
+    print('Getting user-bind...['+str(sw_id)+']\n')
+    for i in range(15):
+        chan.send(' ')
+        time.sleep(0.2)
+        res=chan.recv(10000)
+        user_bind+=res
+    print('Get user-bind OK['+str(sw_id)+']\n')
+    word=re.findall(r'.{8}[a-f0-9]{4}.[a-f0-9]{4}.[a-f0-9]{4}.*/\d*',mac_add)
+    find_new=0
+    find_old=0
+    for i in word:
+        print i 
+        imac=i[8:22]
+        ivlan=i[1:4]
+        iport=i[38:]
+        print ivlan,imac,iport
+        tmpres=conn.execute('select * from maclist where mac="'+imac+'" and sw_id='+str(sw_id)+' and port="'+iport+'";').fetchall()
+        if tmpres==[]:
+            ins_sql="insert into maclist(mac,sw_id,vlan ,port,lastfind) values('"+imac+"',"+str(sw_id)+","+str(ivlan)+",'"+str(iport)+"','"+time.strftime("%Y-%m-%d %H:%M:%S",time.localtime())+"');"
+            find_new+=1
+        else :
+            ins_sql='update maclist set lastfind=\''+time.strftime("%Y-%m-%d %H:%M:%S",time.localtime())+'\' where id='+str(tmpres[0][0])+';'
+            find_old+=1
+        conn.execute(ins_sql)
+    conn.commit()
+    conn.close()
+    return find_new,find_old
+    
+
+    
 def ssh_ruijie(sw_id):
     conn=sqlite3.connect(db_path)
     sql='select * from swlist where id='+str(sw_id)+';'
@@ -72,6 +134,7 @@ def ssh_ruijie(sw_id):
         res=chan.recv(10000)
         user_bind+=res
     print('Get user-bind OK['+str(sw_id)+']\n')
+    print user_bind
     word=re.findall(r'.{12}[a-f0-9]{4}.[a-f0-9]{4}.[a-f0-9]{4}.*/\d*',mac_add)
     find_new=0
     find_old=0
@@ -93,7 +156,7 @@ def ssh_ruijie(sw_id):
     conn.close()
     return find_new,find_old
 
-def telnet_ruijie(sw_id)
+def telnet_cisco(sw_id):
     conn=sqlite3.connect(db_path)
     sql='select * from swlist where id='+str(sw_id)+';'
     res=conn.execute(sql).fetchall()
@@ -103,8 +166,55 @@ def telnet_ruijie(sw_id)
     password=res[0][3]
     sw_type=res[0][4]
     location=res[0][5]
-    #continue here
-    return 0,0
+    tn=telnetlib.Telnet(ip)
+    time.sleep(1)
+    print tn.read_until('Username:')
+    time.sleep(1)
+    tn.write(username.encode()+'\n')
+    time.sleep(1)
+    print tn.read_until('Password:')
+    time.sleep(1)
+    tn.write(password.encode()+'\n')
+    time.sleep(1)
+    tn.write('en\n')
+    time.sleep(1)
+    tn.write(password.encode()+'\n')
+    time.sleep(1)
+    print tn.read_until('#')
+    tn.write('show mac-add\n')
+    for i in range(15):
+        time.sleep(1)
+        tn.write(' ')
+    mac_add=tn.read_until('#')
+    print mac_add
+    tn.write('show run \n')
+    for i in range(15):
+        time.sleep(1)
+        tn.write(' ')
+    bind_add=tn.read_until('#')
+    print bind_add
+    tn.write('exit\n')
+    print tn.read_all()
+    word=re.findall(r'.{8}[a-f0-9]{4}.[a-f0-9]{4}.[a-f0-9]{4}.*/\d*',mac_add)
+    find_new=0
+    find_old=0
+    for i in word:
+        print i 
+        imac=i[8:22]
+        ivlan=i[1:4]
+        iport=i[38:]
+        print ivlan,imac,iport
+        tmpres=conn.execute('select * from maclist where mac="'+imac+'" and sw_id='+str(sw_id)+' and port="'+iport+'";').fetchall()
+        if tmpres==[]:
+            ins_sql="insert into maclist(mac,sw_id,vlan ,port,lastfind) values('"+imac+"',"+str(sw_id)+","+str(ivlan)+",'"+str(iport)+"','"+time.strftime("%Y-%m-%d %H:%M:%S",time.localtime())+"');"
+            find_new+=1
+        else :
+            ins_sql='update maclist set lastfind=\''+time.strftime("%Y-%m-%d %H:%M:%S",time.localtime())+'\' where id='+str(tmpres[0][0])+';'
+            find_old+=1
+        conn.execute(ins_sql)
+    conn.commit()
+    conn.close()
+    return find_new,find_old
 
     
 def getmac(sw_id):
@@ -121,11 +231,14 @@ def getmac(sw_id):
     if sw_type == 'ssh_ruijie':
         print('SSH Connect to ruijie['+ip+'] from '+location+'\n')
         return ssh_ruijie(swid)
-    elif sw_type == 'telnet_ruijie':
+    elif sw_type == 'telnet_cisco':
         print('TELNET Connect to ruijie['+ip+'] from '+location+'\n')
-        return telnet_ruijie(swid)
+        return telnet_cisco(swid)
+    elif sw_type == 'ssh_cisco':
+        print('SSH Connect to cisco['+ip+'] from '+location+'\n')
+        return ssh_cisco(swid)
     else :
-        print 'Not portable Funtion to suit this type of switch!'
+        print 'No portable Funtion to suit this type of switch!'
         return 0,0
 
 
@@ -163,8 +276,8 @@ def flush_all_sw():
 
 
 def flush_one_sw():
-    swids=listsw()
     while 1 :
+        swids=listsw()
         choice=raw_input("Enter switch ID(0:return):")
         if choice=='0':
             return 0
@@ -256,7 +369,74 @@ It will create 2 tables:
     else:
         print 'Operation Cancel...'
 
-    
+
+def debug(sw_id):
+    conn=sqlite3.connect(db_path)
+    sql='select * from swlist where id='+str(sw_id)+';'
+    res=conn.execute(sql).fetchall()
+    swid=res[0][0]
+    ip=res[0][1]
+    username=res[0][2]
+    password=res[0][3]
+    sw_type=res[0][4]
+    location=res[0][5]
+    client=paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(ip,22,username,password)
+    chan=client.invoke_shell()
+    chan.send('en\r\n'+password+'\r\n')
+    mac_add=''
+    chan.send('show mac-add\r\n')
+    time.sleep(0.2)
+    res=chan.recv(2000)
+    mac_add+=res
+    print('Getting mac-address...['+str(sw_id)+']\n')
+    for i in range(15):
+        chan.send(" ")
+        time.sleep(0.2)
+        res=chan.recv(10000)
+        mac_add+=res
+    print '*'*20
+    print mac_add
+    print '*'*20
+    print('Get mac-address OK['+str(sw_id)+']\n')
+    user_bind=''
+    chan.send('show run \n')
+    time.sleep(0.2)
+    res=chan.recv(10000)
+    user_bind+=res
+    print('Getting user-bind...['+str(sw_id)+']\n')
+    for i in range(15):
+        chan.send(' ')
+        time.sleep(0.2)
+        res=chan.recv(10000)
+        user_bind+=res
+    print('Get user-bind OK['+str(sw_id)+']\n')
+    print '*'*20
+    print user_bind
+    print '*'*20
+    word=re.findall(r'.{12}[a-f0-9]{4}.[a-f0-9]{4}.[a-f0-9]{4}.*/\d*',mac_add)
+    find_new=0
+    find_old=0
+    for i in word:
+        print i 
+        imac=i[12:26]
+        ivlan=i[1:4]
+        iport=i[42:]
+        print ivlan,imac,iport
+        tmpres=conn.execute('select * from maclist where mac="'+imac+'" and sw_id='+str(sw_id)+' and port="'+iport+'";').fetchall()
+        if tmpres==[]:
+            ins_sql="insert into maclist(mac,sw_id,vlan ,port,lastfind) values('"+imac+"',"+str(sw_id)+","+str(ivlan)+",'"+str(iport)+"','"+time.strftime("%Y-%m-%d %H:%M:%S",time.localtime())+"');"
+            find_new+=1
+        else :
+            ins_sql='update maclist set lastfind=\''+time.strftime("%Y-%m-%d %H:%M:%S",time.localtime())+'\' where id='+str(tmpres[0][0])+';'
+            find_old+=1
+        print (ins_sql)
+    conn.commit()
+    conn.close()
+    return find_new,find_old
+
+
 while 1:
     menu="""
       ############################################################
